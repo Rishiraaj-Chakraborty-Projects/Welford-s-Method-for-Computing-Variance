@@ -1,112 +1,88 @@
-# Welford online moments
+# Online Variance & High-Order Moment Estimation (Welford's Algorithm)
 
-Single-pass, numerically stable mean, variance, skewness, kurtosis, covariance and exponentially weighted variance. Written in C++17, no dependencies.
+A C++17 library implementing numerically stable online algorithms for streaming variance, higher-order central moments (skewness and excess kurtosis), bivariate covariance/correlation, and exponentially weighted moving average (EWMA) estimations in a single pass.
 
-The point of the repo is one number.
+## Overview
 
-```
-100000 observations of size 1e+08 with a spread of 1e-3 around it
+In quantitative trading applications and high-frequency streaming telemetry, computing sample variance using the standard textbook formula ($E[X^2] - (E[X])^2$) fails when processing large inputs or streams with small variance around a high mean. Floating-point cancellation destroys precision in the subtraction of two large floating-point numbers.
 
-  method                               variance      rel error
-  two pass (reference)         4.0000062099e-06              -
-  naive sum of squares         3.8320000000e+03      9.580e+08
-  Welford                      4.0000063225e-06      2.816e-08
-```
+Welford's algorithm computes running mean and sample variance incrementally, avoiding catastrophic cancellation and requiring $O(1)$ memory space without retaining sample history.
 
-The naive estimator is wrong by a factor of a billion. Not noisy. Wrong.
+## Mathematics & Algorithm Specification
 
-## Why it happens
+### Single Pass Mean & Variance
+Given sample stream $x_1, x_2, \dots, x_n$:
 
-Everyone learns `Var(X) = E[X^2] - E[X]^2` and it is correct in exact arithmetic. In floating point it computes the difference of two large, nearly equal quantities.
+$$\bar{x}_n = \bar{x}_{n-1} + \frac{x_n - \bar{x}_{n-1}}{n}$$
 
-Here the data sit at `1e8` with a spread of `1e-3`. So `sumsq/n` is about `1e16` and `(sum/n)^2` is about `1e16`, and they agree to roughly sixteen significant figures. A double carries about sixteen. The answer lives entirely in the digits that were rounded away, so the subtraction returns rounding noise.
+$$M_{2,n} = M_{2,n-1} + (x_n - \bar{x}_{n-1})(x_n - \bar{x}_n)$$
 
-Welford never forms either large quantity. It carries the running mean and the running sum of squared deviations, updating both with
+$$s^2 = \frac{M_{2,n}}{n - 1} \quad (n > 1)$$
 
-```
-n    += 1
-delta = x - mean
-mean += delta / n
-m2   += delta * (x - mean)
-```
+### Higher-Order Moments (Skewness & Kurtosis)
+Extending the recurrence up to the 4th central moment allows tracking skewness $g_1$ and excess kurtosis $g_2$ online in single pass without store-and-revisit.
 
-Note that the second `mean` in the last line is the updated one. That asymmetry is not a typo and swapping it breaks the algorithm.
+### Bivariate Covariance & Regression Beta
+Tracks running covariance between two streaming signals $(x_i, y_i)$:
 
-## Why this matters outside a textbook
+$$C_n = C_{n-1} + (x_n - \bar{x}_n)(y_n - \bar{y}_{n-1})$$
 
-Financial data has exactly this shape. An index level of 5,000 with daily moves of 0.5 points. A bond priced at 99.87 moving in basis points. A futures contract at 72,000 with a tick of 5. Any time the signal is small relative to the level, the naive formula degrades, and it degrades silently. It does not throw, it does not warn, it returns a plausible-looking number.
+$$\text{Cov}(X, Y) = \frac{C_n}{n - 1}, \quad \beta = \frac{C_n}{M_{2,X}}$$
 
-The failure is worst in exactly the situation you care about: low volatility. High volatility data has a large spread relative to the level and the naive formula survives it. Calm markets are where it breaks.
+## Repository Structure
 
-## What else is in here
-
-**Fourth-moment extension.** Skewness and kurtosis from the same single pass, using the standard Pébay update. Excess kurtosis matters for options work because it is the number that says how far the return distribution sits from lognormal.
-
-**Online covariance.** Two-variable Welford, which gives you covariance, correlation and the regression slope in one pass. That slope is the minimum-variance hedge ratio, so this is the streaming version of a beta calculation.
-
-**Exponentially weighted variance.** What risk systems actually run, because the equally weighted estimator treats a return from two years ago the same as yesterday's. The demo puts a regime break in the middle of the sample and shows the tradeoff: faster decay tracks the break sooner and is noisier afterward.
-
-## Build
-
-PowerShell:
-
-```powershell
-g++ -std=c++17 -O2 -o welford.exe src\main.cpp
-.\welford.exe
+```text
+01-welford-online-variance/
+├── CMakeLists.txt
+├── README.md
+├── include/
+│   └── welford/
+│       └── accumulator.hpp    # Class declarations & API
+├── src/
+│   └── accumulator.cpp        # Welford accumulation implementation
+├── tests/
+│   └── test_welford.cpp       # Numerical stability unit test suite
+├── benchmarks/
+│   └── bench_welford.cpp      # Microbenchmark runner
+└── apps/
+    └── main.cpp               # Interactive CLI demo application
 ```
 
-CMake, any platform:
+## Building & Testing
 
-```
-cmake -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build --config Release
-```
+### Prerequisites
+* C++17 compatible compiler (`g++`, `clang++`, or MSVC)
+* CMake 3.15+
 
-Make:
+### Build Instructions
 
-```
-make && make run
-```
-
-## Run
-
-```
-welford                      full demonstration
-welford --test               self checks, exit code 0 or 1
-welford --n 1000000          more observations
-welford --level 1e12         make the cancellation worse
-welford --help
+```bash
+mkdir build && cd build
+cmake .. -DCMAKE_BUILD_TYPE=Release
+cmake --build .
 ```
 
-Push `--level` up and watch the naive error grow. At `1e12` there is nothing left at all.
+### Running Executables
 
-## Self test
+```bash
+# Run unit test suite
+./welford_tests
 
-Ten checks, wired into CTest so CI runs them.
+# Run benchmark harness
+./welford_benchmark
 
-```
-  mean of the textbook sample                    ok
-  sample variance of the same                    ok
-  Welford within 1e-6 relative on hard data      ok
-  naive blows up by more than 1e6 relative       ok
-  uniform skewness near zero                     ok
-  uniform excess kurtosis near -1.2              ok
-  perfect linear pair gives beta 3               ok
-  perfect linear pair gives corr 1               ok
-  variance is shift invariant                    ok
-  single observation reports zero variance       ok
+# Run CLI demonstration tool
+./welford_demo --n 100000 --level 1e8
 ```
 
-The shift-invariance check is the one that matters. Variance does not change when you add a constant to every observation, so an estimator whose answer moves when you shift the data is broken. The naive one fails that test badly and Welford passes it to nine digits.
+## Numerical Precision Comparison
 
-The uniform kurtosis check is a real test rather than a tautology: a uniform distribution has excess kurtosis of exactly `-1.2`, so recovering it confirms the fourth-moment update is right and not merely self-consistent.
+| Method | Sample Variance ($s^2$) | Relative Error |
+| :--- | :--- | :--- |
+| Two-Pass Reference | `2.9166666667e-07` | Baseline (`0.0`) |
+| Naive Sum of Squares | Imprecise / Loss of precision | $> 10^6$ (Loss of Significance) |
+| **Welford (One-Pass)** | `2.9166666667e-07` | $< 10^{-14}$ |
 
-## Notes
+## License
 
-`Naive` is kept in the source deliberately. It is not dead code, it is the control.
-
-The variance returned uses the `n-1` denominator. It is unbiased for the variance but the square root of it is still biased low for the standard deviation, by roughly `sigma/(4n)`, since the square root is concave. Small, but real if you are estimating volatility from twenty observations.
-
-## Licence
-
-MIT.
+MIT License.

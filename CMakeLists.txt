@@ -1,22 +1,37 @@
 cmake_minimum_required(VERSION 3.15)
-project(welford LANGUAGES CXX)
+project(WelfordOnlineVariance LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-if(NOT CMAKE_BUILD_TYPE)
-  set(CMAKE_BUILD_TYPE Release)
-endif()
-
-add_executable(welford src/main.cpp)
-
+# Compiler Warnings
 if(MSVC)
-  target_compile_options(welford PRIVATE /W4 /O2)
+    add_compile_options(/W4 /permissive-)
 else()
-  target_compile_options(welford PRIVATE -Wall -Wextra -O2)
+    add_compile_options(-Wall -Wextra -Wpedantic -Wconversion -Wshadow)
 endif()
 
+# Core Library
+add_library(welford_lib
+    src/accumulator.cpp
+)
 
+target_include_directories(welford_lib PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+)
+
+# CLI Demo Target
+add_executable(welford_demo apps/main.cpp)
+target_link_libraries(welford_demo PRIVATE welford_lib)
+
+# Unit Test Target
 enable_testing()
-add_test(NAME selftest COMMAND welford --test)
+add_executable(welford_tests tests/test_welford.cpp)
+target_link_libraries(welford_tests PRIVATE welford_lib)
+add_test(NAME WelfordUnitTest COMMAND welford_tests)
+
+# Benchmark Target
+add_executable(welford_benchmark benchmarks/bench_welford.cpp)
+target_link_libraries(welford_benchmark PRIVATE welford_lib)
